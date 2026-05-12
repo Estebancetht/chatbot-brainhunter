@@ -1,5 +1,5 @@
-streamlit==1.45.1
-chromadb==0.5.23
-requests==2.31.0
-sentence-transformers==2.2.2
-numpy==1.26.4
+streamlit
+chromadb
+requests
+sentence-transformers
+qdrant-client
