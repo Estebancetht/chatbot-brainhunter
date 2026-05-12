@@ -1,6 +1,7 @@
 import streamlit as st
-import chromadb
 import requests
+from qdrant_client import QdrantClient
+from sentence_transformers import SentenceTransformer
 
 st.set_page_config(
     page_title="Brain Hunter · Asistente de Capacitación",
@@ -8,9 +9,11 @@ st.set_page_config(
     layout="centered"
 )
 
-# ── REEMPLAZA CON TU API KEY DE GROQ ────────────────────
-GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
-# ────────────────────────────────────────────────────────
+# ── CREDENCIALES ─────────────────────────────────────────
+GROQ_API_KEY   = st.secrets["GROQ_API_KEY"]
+QDRANT_URL     = st.secrets["QDRANT_URL"]
+QDRANT_API_KEY = st.secrets["QDRANT_API_KEY"]
+# ─────────────────────────────────────────────────────────
 
 if "modo_oscuro" not in st.session_state:
     st.session_state.modo_oscuro = True
@@ -375,19 +378,23 @@ hr {{
 </style>
 """, unsafe_allow_html=True)
 
+# ── BASE DE DATOS ────────────────────────────────────────
 @st.cache_resource
 def cargar_bd():
-    client = chromadb.PersistentClient(path="./base_datos")
-    return client.get_collection("videos_empresa")
+    client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+    modelo = SentenceTransformer("all-MiniLM-L6-v2")
+    return client, modelo
 
-coleccion = cargar_bd()
+qdrant, modelo = cargar_bd()
 
+# ── SWITCH MODO ──────────────────────────────────────────
 col1, col2, col3 = st.columns([1, 1, 0.4])
 with col3:
     if st.button(f"{switch_icon} {switch_label}"):
         st.session_state.modo_oscuro = not st.session_state.modo_oscuro
         st.rerun()
 
+# ── HERO ────────────────────────────────────────────────
 st.markdown(f"""
 <div class="bh-hero">
     <div class="bh-badge">🧠 Asistente IA · Brain Hunter</div>
@@ -396,6 +403,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# ── HISTORIAL ───────────────────────────────────────────
 if "historial" not in st.session_state:
     st.session_state.historial = []
 
@@ -414,6 +422,7 @@ for msg in st.session_state.historial:
     with st.chat_message(msg["rol"]):
         st.markdown(msg["contenido"], unsafe_allow_html=True)
 
+# ── INPUT ───────────────────────────────────────────────
 pregunta = st.chat_input("¿Qué tema estás buscando en los videos?")
 
 if pregunta:
@@ -424,17 +433,18 @@ if pregunta:
     with st.chat_message("assistant"):
         with st.spinner("Buscando en los videos..."):
 
-            resultados = coleccion.query(
-                query_texts=[pregunta],
-                n_results=4
-            )
+            vector = modelo.encode(pregunta).tolist()
+            resultados = qdrant.query_points(
+                collection_name="videos_empresa",
+                query=vector,
+                limit=4
+            ).points
 
             contexto = ""
             fuentes = []
-            for i in range(len(resultados["documents"][0])):
-                meta = resultados["metadatas"][0][i]
-                texto = resultados["documents"][0][i]
-                contexto += f"- Video: '{meta['video']}', Minuto: {meta['timestamp']}, Contenido: {texto}\n"
+            for r in resultados:
+                meta = r.payload
+                contexto += f"- Video: '{meta['video']}', Minuto: {meta['timestamp']}, Contenido: {meta['texto']}\n"
                 fuentes.append(meta)
 
             prompt = f"""Eres un asistente de capacitación empresarial de Brain Hunter.
