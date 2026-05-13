@@ -10,9 +10,10 @@ st.set_page_config(
 )
 
 # ── CREDENCIALES ─────────────────────────────────────────
-GROQ_API_KEY   = st.secrets["GROQ_API_KEY"]
-QDRANT_URL     = st.secrets["QDRANT_URL"]
-QDRANT_API_KEY = st.secrets["QDRANT_API_KEY"]
+import os
+GROQ_API_KEY   = os.environ.get("GROQ_API_KEY")
+QDRANT_URL     = os.environ.get("QDRANT_URL")
+QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY")
 # ─────────────────────────────────────────────────────────
 
 def get_embedding(texto):
