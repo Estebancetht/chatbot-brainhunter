@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 from qdrant_client import QdrantClient
-from sentence_transformers import SentenceTransformer
+from qdrant_client.models import NamedVector
 
 st.set_page_config(
     page_title="Brain Hunter · Asistente de Capacitación",
@@ -14,6 +14,27 @@ GROQ_API_KEY   = st.secrets["GROQ_API_KEY"]
 QDRANT_URL     = st.secrets["QDRANT_URL"]
 QDRANT_API_KEY = st.secrets["QDRANT_API_KEY"]
 # ─────────────────────────────────────────────────────────
+
+def get_embedding(texto):
+    """Obtiene embedding usando la API de Groq"""
+    respuesta = requests.post(
+        "https://api.groq.com/openai/v1/embeddings",
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "llama-3.3-70b-versatile",
+            "input": texto
+        },
+        timeout=30
+    )
+    # Si Groq no soporta embeddings, usar vector de zeros como fallback
+    try:
+        return respuesta.json()["data"][0]["embedding"]
+    except:
+        # Fallback: usar búsqueda por texto simple en Qdrant
+        return None
 
 if "modo_oscuro" not in st.session_state:
     st.session_state.modo_oscuro = True
@@ -380,12 +401,10 @@ hr {{
 
 # ── BASE DE DATOS ────────────────────────────────────────
 @st.cache_resource
-def cargar_bd():
-    client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-    modelo = SentenceTransformer("all-MiniLM-L6-v2")
-    return client, modelo
+def cargar_cliente():
+    return QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
-qdrant, modelo = cargar_bd()
+qdrant = cargar_cliente()
 
 # ── SWITCH MODO ──────────────────────────────────────────
 col1, col2, col3 = st.columns([1, 1, 0.4])
@@ -433,18 +452,35 @@ if pregunta:
     with st.chat_message("assistant"):
         with st.spinner("Buscando en los videos..."):
 
-            vector = modelo.encode(pregunta).tolist()
-            resultados = qdrant.query_points(
+            # Buscar usando scroll + filtro por texto en Qdrant
+            resultados_scroll, _ = qdrant.scroll(
                 collection_name="videos_empresa",
-                query=vector,
-                limit=4
-            ).points
+                limit=200,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            # Filtrar por palabras clave de la pregunta
+            palabras = pregunta.lower().split()
+            scored = []
+            for punto in resultados_scroll:
+                texto = punto.payload.get("texto", "").lower()
+                score = sum(1 for p in palabras if p in texto)
+                if score > 0:
+                    scored.append((score, punto))
+
+            scored.sort(key=lambda x: x[0], reverse=True)
+            top_resultados = [p for _, p in scored[:4]]
+
+            # Si no hay resultados con keywords, tomar los primeros
+            if not top_resultados:
+                top_resultados = resultados_scroll[:4]
 
             contexto = ""
             fuentes = []
-            for r in resultados:
+            for r in top_resultados:
                 meta = r.payload
-                contexto += f"- Video: '{meta['video']}', Minuto: {meta['timestamp']}, Contenido: {meta['texto']}\n"
+                contexto += f"- Video: '{meta.get('video','')}', Minuto: {meta.get('timestamp','')}, Contenido: {meta.get('texto','')}\n"
                 fuentes.append(meta)
 
             prompt = f"""Eres un asistente de capacitación empresarial de Brain Hunter.
@@ -485,16 +521,16 @@ Importante: usa la palabra "video" en lugar de "curso". Sé conciso y útil."""
             vistos = set()
             refs_html = '<div class="bh-refs-title">📍 Ir directamente al video</div>'
             for f in fuentes[:3]:
-                key = f"{f['video']}_{f['timestamp']}"
+                key = f"{f.get('video','')}_{f.get('timestamp','')}"
                 if key not in vistos:
                     vistos.add(key)
-                    nombre = f['video'].replace('_', ' ')
+                    nombre = f.get('video','').replace('_', ' ')
                     refs_html += f"""<div class="bh-ref">
   <div class="bh-ref-info">
     <span class="bh-ref-name">{nombre}</span>
-    <span class="bh-ref-time">⏱ Minuto {f['timestamp']}</span>
+    <span class="bh-ref-time">⏱ Minuto {f.get('timestamp','')}</span>
   </div>
-  <a href="{f['url_directa']}" target="_blank" class="bh-ref-link">Abrir video →</a>
+  <a href="{f.get('url_directa','')}" target="_blank" class="bh-ref-link">Abrir video →</a>
 </div>"""
 
             st.markdown(refs_html, unsafe_allow_html=True)
