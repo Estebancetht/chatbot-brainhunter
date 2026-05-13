@@ -1,3 +1,6 @@
 streamlit
 requests
 qdrant-client
+sentence-transformers
+torch
+protobuf==3.20.*
